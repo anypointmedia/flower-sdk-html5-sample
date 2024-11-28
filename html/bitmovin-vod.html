@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+    <title>Bitmovin VOD Sample</title>
+    <script src="https://sdk.anypoint.tv/html5/flower-sdk-1.2.18-rc1-20241128.js"></script>
+    <script src="https://cdn.bitmovin.com/player/web/8/bitmovinplayer.js" type="text/javascript"></script>
+    <style>
+      #video-container {
+        position: relative;
+        display: inline-block;
+      }
+
+      #bitmovin-container {
+        width: 1280px;
+        height: 720px;
+      }
+
+      #ad-container {
+        display: none;
+        position: absolute;
+        top: 0px;
+        right: 0px;
+        bottom: 0px;
+        left: 0px;
+      }
+
+      #ad-information {
+        display: none;
+        position: absolute;
+        right: 5px;
+        bottom: 5px;
+        background-color: white;
+        font-size: 2em;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="video-container">
+      <div id="bitmovin-container">
+        <video></video>
+      </div>
+      <div id="ad-container"></div>
+      <div id="ad-information"></div>
+    </div>
+    <footer>
+      <button onclick="playLinearTv()">play</button>
+      <div id="_console"></div>
+    </footer>
+    <script>
+      function prepareTestLogging(player) {
+        const _console = document.getElementById('_console');
+        _console.log = function (text) {
+          const span = document.createElement('span');
+          span.innerHTML = text;
+          span.appendChild(document.createElement('br'));
+          _console.insertBefore(span, _console.firstChild);
+          Array.from(_console.children).slice(20).forEach(function (child) {
+            _console.removeChild(child);
+          });
+        };
+
+        let activeFrag;
+        player.on(bitmovin.player.PlayerEvent.SegmentPlayback, data => {
+          if (!data.mimeType.startsWith('video')) {
+            return;
+          }
+
+          if (!activeFrag || activeFrag.url !== data.url) {
+            _console.log(data.url);
+          }
+
+          activeFrag = data;
+        });
+
+        // Event listener for Bitmovin player error event
+        player.on(bitmovin.player.PlayerEvent.Warning, event => {
+          console.warn('Bitmovin Warning: ' + event.code + ' - ' + event.name, event.data);
+        });
+        player.on(bitmovin.player.PlayerEvent.Error, event => {
+          console.error('Bitmovin Error: ' + event.code + ' - ' + event.name, event.data);
+        });
+      }
+
+      // Your Bitmovin API key
+      const BITMOVIN_API_KEY = '';
+
+      let player;
+      let isContentLoad = false;
+      let isContentEnd = false;
+
+      // TODO GUIDE: initialize SDK
+      // env must be one of local, dev, prod
+      FlowerSdk.setEnv('local');
+      FlowerSdk.init();
+      // Log level must be one of Verbose, Debug, Info, Warn, Error, Off
+      FlowerSdk.setLogLevel('Verbose');
+
+      const movie = {
+        title: 'Your VOD Stream',
+        url: 'https://XXX',
+        durationMs: 0
+      };
+
+      // TODO GUIDE: create FlowerAdView instance
+      const flowerAdView = new FlowerAdView(document.getElementById('ad-container'));
+
+      function playLinearTv() {
+        // Creating the Bitmovin player instance
+        player = new bitmovin.player.Player(
+          document.querySelector('#bitmovin-container'),
+          {
+            key: BITMOVIN_API_KEY,
+          },
+        );
+
+        Object.values(bitmovin.player.PlayerEvent).forEach(eventType => {
+          player.on(eventType, event => {
+            const message = `Bitmovin Player ${eventType}: ${JSON.stringify(event)}`;
+
+            switch (eventType) {
+              case bitmovin.player.PlayerEvent.Paused:
+                console.warn(message);
+                break;
+              case bitmovin.player.PlayerEvent.Warning:
+                console.warn(message);
+                break;
+              case bitmovin.player.PlayerEvent.Error:
+                console.error(message);
+                break;
+              default:
+                console.debug(message);
+                break;
+            }
+          });
+        });
+
+        player.setVideoElement(document.querySelector('video'));
+        player.on(bitmovin.player.PlayerEvent.Ready, () => isContentLoad = true);
+        player.on(bitmovin.player.PlayerEvent.PlaybackFinished, () => {
+          isContentEnd = true;
+          // TODO GUIDE: notify end of vod content
+          flowerAdView.adsManager.notifyContentEnded();
+        });
+
+        prepareTestLogging(player);
+
+        // TODO GUIDE: implement & add FlowerAdsManagerListener
+        const adsManagerListener = {
+          onPrepare(adDurationMs) {
+            if (player.isPlaying()) {
+              // OPTIONAL GUIDE: additional actions before ad playback
+              const adInformation = document.getElementById('ad-information');
+              adInformation.innerHTML = 'Ads will start in a moment';
+              adInformation.style.display = 'block';
+              document.querySelector('#video-container').appendChild(adInformation);
+
+              setTimeout(() => {
+                // TODO GUIDE: play midroll ad
+                adInformation.style.display = 'none';
+                flowerAdView.adsManager.play();
+              }, 5000);
+            } else {
+              // TODO GUIDE: play preroll ad
+              flowerAdView.adsManager.play();
+            }
+          },
+          onPlay() {
+            // TODO GUIDE: pause VOD content
+            player.pause();
+          },
+          onCompleted() {
+            // TODO GUIDE: resume VOD content after ad complete
+            if (isContentEnd) {
+              return;
+            }
+
+            if (isContentLoad) {
+              player.play();
+            } else {
+              player.on(bitmovin.player.PlayerEvent.Ready, () => player.play());
+            }
+          },
+          onError(error) {
+            console.error('Error from Flower SDK: ', error);
+            // TODO GUIDE: resume VOD content on ad error
+            if (isContentEnd) {
+              return;
+            }
+
+            player.play();
+          },
+          onAdSkipped(reason) {
+            console.log('onAdSkipped: ', reason);
+          },
+        };
+        flowerAdView.adsManager.addListener(adsManagerListener);
+
+        // TODO GUIDE: implement MediaPlayerHook
+        const mediaPlayerHook = {
+          getPlayer() {
+            return player;
+          },
+        };
+
+        // TODO GUIDE: request vod ad
+        // arg0: adTagUrl, url from flower system.
+        //       You must file a request to Anypoint Media to receive a adTagUrl.
+        // arg1: contentId, unique content id in your service
+        // arg2: durationMs, duration of vod content in milliseconds
+        // arg3: extraParams, values you can provide for targeting
+        // arg4: mediaPlayerHook, interface that provides currently playing segment information for ad tracking
+        // arg5: adTagHeaders, (Optional) values included in headers for ad request
+        flowerAdView.adsManager.requestVodAd(
+          'https://ad_request',
+          '-255',
+          movie.duration,
+          new Map(),
+          mediaPlayerHook,
+          new Map(),
+        );
+
+        player.load({ hls: movie.url });
+      }
+    </script>
+  </body>
+</html>
